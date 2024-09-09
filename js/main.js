@@ -6,16 +6,16 @@ let uid = String(Math.floor(Math.random() * 10000));
 let client;
 let channel;
 
-let queryString = window.location.search;
-let urlParams = new URLSearchParams(queryString);
-let roomId = urlParams.get('room');
+let queryString=window.location.search
+let urlParams=new URLSearchParams(queryString)
+let roomId=urlParams.get('room')
 
-if (!roomId) {
-    window.location = 'lobby.html'; // Redirect to lobby if no room ID is present
+if(!roomId){
+    window.location='lobby.html'
 }
-
 let localStream;
-let peerConnections = {}; // To hold multiple peer connections for multiple participants
+let remoteStream;
+let peerConnection;
 
 /* Setup the server */
 const server = {
@@ -25,27 +25,25 @@ const server = {
         }
     ]
 };
-
-let constraints = {
-    video: {
-        width: { min: 640, ideal: 1920, max: 1920 },
-        height: { min: 480, ideal: 1080, max: 1080 },
+let  constraints={
+    video:{
+        width:{min:640, ideal:1920, max:1920},
+        height:{min:480, ideal:1080, max:1080},
     },
-    audio: true
-};
-
+    audio:true
+}
 let init = async () => {
     client = await AgoraRTM.createInstance(APP_ID);
 
     await client.login({ uid, token });
     channel = client.createChannel(roomId);
-    console.log(`Channel '${roomId}' created.`);
+    console.log("Channel 'main' created.");
 
     await channel.join();
-    console.log(`Joined channel '${roomId}'.`);
+    console.log("Joined channel 'main'.");
 
     channel.on('MemberJoined', handleUserJoin);
-    channel.on('MemberLeft', handleUserLeft);
+    channel.on('MemberLeft',hadleUserLeft)
 
     client.on('MessageFromPeer', handleMessagePeer);
 
@@ -53,19 +51,11 @@ let init = async () => {
     localStream = await navigator.mediaDevices.getUserMedia(constraints);
     document.getElementById('user-1').srcObject = localStream;
 };
+let hadleUserLeft=async (MemberId)=>{
+    document.getElementById('user-2').style.display='none'
+    document.getElementById('user-1').classList.remove('smallFrame')
 
-let handleUserLeft = async (MemberId) => {
-    console.log("User left the channel:", MemberId);
-    document.getElementById('user-2').style.display = 'none';
-    document.getElementById('user-1').classList.remove('smallFrame');
-
-    // Close and remove the peer connection
-    if (peerConnections[MemberId]) {
-        peerConnections[MemberId].close();
-        delete peerConnections[MemberId];
-    }
-};
-
+}
 let handleMessagePeer = async (message, MemberId) => {
     message = JSON.parse(message.text);
 
@@ -76,91 +66,82 @@ let handleMessagePeer = async (message, MemberId) => {
         addAnswer(message.answer);
     }
     if (message.type === 'candidate') {
-        if (peerConnections[MemberId]) {
-            peerConnections[MemberId].addIceCandidate(new RTCIceCandidate(message.candidate));
+        if (peerConnection) {
+            peerConnection.addIceCandidate(message.candidate);
         }
     }
 };
 
 let handleUserJoin = async (MemberId) => {
     console.log("New user joined the channel:", MemberId);
-    await createOffer(MemberId);
+    createOffer(MemberId);
 };
 
 let createPeerConnection = async (MemberId) => {
-    let peerConnection = new RTCPeerConnection(server);
-    let remoteStream = new MediaStream();
-
+    peerConnection = new RTCPeerConnection(server);
+    remoteStream = new MediaStream();
     document.getElementById('user-2').srcObject = remoteStream;
-    document.getElementById('user-2').style.display = 'block';
-    document.getElementById('user-1').classList.add('smallFrame');
+    document.getElementById('user-2').style.display='block'
+    document.getElementById('user-1').classList.add('smallFrame')
+
+    if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        document.getElementById('user-1').srcObject = localStream;
+    }
 
     /* Add local tracks to the peer connection */
     localStream.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStream);
     });
 
-    /* Handle incoming tracks */
     peerConnection.ontrack = (event) => {
         event.streams[0].getTracks().forEach((track) => {
             remoteStream.addTrack(track);
         });
     };
 
-    /* Handle ICE candidates */
     peerConnection.onicecandidate = async (event) => {
         if (event.candidate) {
-            client.sendMessageToPeer(
-                { text: JSON.stringify({ type: 'candidate', candidate: event.candidate }) },
-                MemberId
-            );
+            client.sendMessageToPeer({ text: JSON.stringify({ type: 'candidate', candidate: event.candidate }) }, MemberId);
         }
     };
-
-    /* Store the peer connection for this member */
-    peerConnections[MemberId] = peerConnection;
 };
 
+/* Create an offer for the peer connection */
 let createOffer = async (MemberId) => {
-    let peerConnection = await createPeerConnection(MemberId);
+    await createPeerConnection(MemberId);
 
     let offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
 
-    client.sendMessageToPeer(
-        { text: JSON.stringify({ type: 'offer', offer: offer }) },
-        MemberId
-    );
-    console.log("Offer sent:", offer);
+    client.sendMessageToPeer({ text: JSON.stringify({ type: 'offer', offer: offer }) }, MemberId);
+    console.log(offer);
 };
 
+/* Create an answer for the received offer */
 let createAnswer = async (MemberId, offer) => {
-    let peerConnection = await createPeerConnection(MemberId);
+    await createPeerConnection(MemberId);
 
+    // Modification: Use RTCSessionDescription to set the correct type for the offer
     await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
     let answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
 
-    client.sendMessageToPeer(
-        { text: JSON.stringify({ type: 'answer', answer: answer }) },
-        MemberId
-    );
-    console.log("Answer sent:", answer);
+    client.sendMessageToPeer({ text: JSON.stringify({ type: 'answer', answer: answer }) }, MemberId);
 };
 
+/* Add answer to the peer connection */
 let addAnswer = async (answer) => {
-    let peerConnection = peerConnections[Object.keys(peerConnections)[0]]; // Get the first connection for simplicity
-    if (peerConnection && !peerConnection.currentRemoteDescription) {
+    // Modification: Use RTCSessionDescription to set the correct type for the answer
+    if (!peerConnection.currentRemoteDescription) {
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log("Answer added:", answer);
     }
 };
 
-let leaveChannel = async () => {
-    await channel.leave();
+let leaveChannel=async ()=>{
+    await channel.leave()
     await client.logout();
-};
-
+}
 let toggleCamera = async () => {
     let videoTrack = localStream.getTracks().find(track => track.kind === 'video');
     if (videoTrack.enabled) {
@@ -185,8 +166,7 @@ let toggleMic = async () => {
 
 window.addEventListener('beforeunload', leaveChannel);
 
-// Correct event listeners
+// Correcting event listeners to pass function references
 document.getElementById('camera-btn').addEventListener('click', toggleCamera);
 document.getElementById('mic-btn').addEventListener('click', toggleMic);
-
 init();
